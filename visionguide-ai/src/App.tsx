@@ -5,6 +5,7 @@ import VisionAssistant from "./pages/VisionAssistant";
 import SpeechHearing from "./pages/SpeechHearing";
 import EyeControl from "./pages/EyeControl";
 import AboutPage from "./pages/AboutPage";
+import GlobalEyeTracking from "./components/GlobalEyeTracking";
 import { useEffect } from "react";
 
 export default function App() {
@@ -24,8 +25,11 @@ export default function App() {
         <Route path="/speech-hearing" element={<SpeechHearing />} />
         <Route path="/eye-control" element={<EyeControl />} />
         <Route path="/about" element={<AboutPage />} />
-        <Route path="/features" element={<HomePage />} /> {/* Features can be a section on Home or its own page */}
+        <Route path="/features" element={<HomePage />} />
       </Routes>
+
+      {/* Global eye tracking — available on ALL pages */}
+      <GlobalEyeTracking />
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { SALanguage } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
-const DEFAULT_MODEL = "gemini-3.1-pro-preview";
+const DEFAULT_MODEL = "gemini-2.5-flash";
 
 // Simple in-memory cache to reduce API calls
 const cache = new Map<string, string>();
@@ -15,7 +15,7 @@ async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promis
     // If rate limited, wait longer
     const isRateLimit = error?.message?.includes("429") || error?.status === "RESOURCE_EXHAUSTED";
     const nextDelay = isRateLimit ? delay * 4 : delay * 2;
-    
+
     if (retries <= 0) throw error;
     await new Promise(resolve => setTimeout(resolve, delay));
     return retry(fn, retries - 1, nextDelay);
@@ -106,7 +106,7 @@ export async function getAvatarResponse(prompt: string, lang: SALanguage): Promi
         responseMimeType: "application/json",
       }
     }));
-    
+
     const data = JSON.parse(response.text || "{}");
     const result = {
       text: data.english || "I'm here to help.",
@@ -195,7 +195,7 @@ export async function generateSign(text: string): Promise<any[]> {
         }
       }
     }));
-    
+
     const data = JSON.parse(response.text || "[]");
     return Array.isArray(data) ? data : [];
   } catch (error) {

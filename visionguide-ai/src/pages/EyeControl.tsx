@@ -1,91 +1,236 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { ArrowLeft, Eye, Zap, MousePointer2, ShieldCheck, Camera, CameraOff, CheckCircle2, RefreshCw, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Languages } from "lucide-react";
+import { ArrowLeft, Eye, Zap, MousePointer2, ShieldCheck, Camera, CameraOff, CheckCircle2, RefreshCw, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Languages, Activity, Loader2, Scan } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "../components/Button";
 import { useSpeech } from "../hooks/useSpeech";
+import { useEyeBlinkDetection } from "../hooks/useEyeBlinkDetection";
+import type { HeadDirection } from "../hooks/useEyeBlinkDetection";
 import { SALanguage, LANGUAGES } from "../types";
 import { translateText } from "../services/geminiService";
 
-type HeadDirection = "Center" | "Left" | "Right" | "Up" | "Down";
+const NAV_BUTTONS = [
+  { label: "Go to Home", path: "/" },
+  { label: "Open Visual Assistance", path: "/vision" },
+  { label: "Open Speech & Hearing", path: "/speech-hearing" },
+  { label: "About SignBridge", path: "/about" },
+];
 
 export default function EyeControl() {
   const navigate = useNavigate();
   const { speak } = useSpeech();
   const [lang, setLang] = useState<SALanguage>("en-ZA");
   const [isTracking, setIsTracking] = useState(false);
-  const [status, setStatus] = useState<"Camera Off" | "Tracking Active">("Camera Off");
-  const [blinkDetected, setBlinkDetected] = useState(false);
-  const [headDirection, setHeadDirection] = useState<HeadDirection>("Center");
+  const [status, setStatus] = useState<"Camera Off" | "Loading Model" | "Tracking Active">("Camera Off");
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [isCalibrated, setIsCalibrated] = useState(false);
-  const [calibrationStep, setCalibrationStep] = useState(0);
+  const [calibrationBlinks, setCalibrationBlinks] = useState(0);
   const [stream, setStream] = useState<MediaStream | null>(null);
-  const [cursorPos, setCursorPos] = useState({ x: 50, y: 50 }); // Percentage
+  const [cursorPos, setCursorPos] = useState({ x: 50, y: 50 });
+  const [blinkFlash, setBlinkFlash] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  const navButtons = [
-    { label: "Go to Home", path: "/" },
-    { label: "Open Visual Assistance", path: "/vision" },
-    { label: "Open Speech & Hearing", path: "/speech-hearing" },
-    { label: "About SignBridge", path: "/about" },
-  ];
+  // Refs to avoid stale closures in effects
+  const focusedIndexRef = useRef(focusedIndex);
+  const isCalibratedRef = useRef(isCalibrated);
+  const calibrationBlinksRef = useRef(calibrationBlinks);
+  const isTrackingRef = useRef(isTracking);
+  const prevDirectionRef = useRef<HeadDirection>("Center");
+
+  // Keep refs in sync
+  useEffect(() => { focusedIndexRef.current = focusedIndex; }, [focusedIndex]);
+  useEffect(() => { isCalibratedRef.current = isCalibrated; }, [isCalibrated]);
+  useEffect(() => { calibrationBlinksRef.current = calibrationBlinks; }, [calibrationBlinks]);
+  useEffect(() => { isTrackingRef.current = isTracking; }, [isTracking]);
+
+  const {
+    isBlinking,
+    blinkCount,
+    headDirection,
+    isReady,
+    isLoading,
+    earValue,
+    startTracking: startFaceMesh,
+    stopTracking: stopFaceMesh,
+  } = useEyeBlinkDetection({
+    earThreshold: 0.20,
+    minBlinkFrames: 2,
+    blinkCooldownMs: 600,
+    headSensitivity: 0.03,
+  });
 
   // Voice feedback helper
   const announce = useCallback(async (text: string) => {
     speak(text);
     if (lang !== "en-ZA") {
-      const translated = await translateText(text, lang);
-      setTimeout(() => speak(translated, lang), 1500);
+      try {
+        const translated = await translateText(text, lang);
+        setTimeout(() => speak(translated, lang), 1500);
+      } catch { /* ignore translation errors */ }
     }
   }, [lang, speak]);
 
-  const handleBlink = useCallback(() => {
-    setBlinkDetected(true);
-    setTimeout(() => setBlinkDetected(false), 300);
+  // ===== BLINK HANDLER =====
+  // Track blinkCount changes to detect blinks (avoids stale closure issues)
+  const prevBlinkCountRef = useRef(0);
 
-    if (!isCalibrated) {
-      setCalibrationStep((prev) => {
-        const next = prev + 1;
-        if (next >= 2) {
-          setIsCalibrated(true);
-          announce("Calibration complete. Eye tracking active.");
-        } else {
-          announce(`Step ${next} of 2. Blink again.`);
-        }
-        return next;
-      });
+  useEffect(() => {
+    if (blinkCount === 0 || blinkCount === prevBlinkCountRef.current) return;
+    prevBlinkCountRef.current = blinkCount;
+
+    if (!isTrackingRef.current) return;
+
+    // Visual flash
+    setBlinkFlash(true);
+    setTimeout(() => setBlinkFlash(false), 350);
+
+    if (!isCalibratedRef.current) {
+      // Calibration mode
+      const nextCal = calibrationBlinksRef.current + 1;
+      setCalibrationBlinks(nextCal);
+      if (nextCal >= 3) {
+        setIsCalibrated(true);
+        announce("Calibration complete! Move your head to navigate. Blink to select.");
+      } else {
+        announce(`Calibration: ${nextCal} of 3. Blink again.`);
+      }
       return;
     }
 
-    if (isTracking) {
-      const targetButton = navButtons[focusedIndex];
-      announce(`Navigating to ${targetButton.label}`);
+    // Post-calibration: blink = select focused button
+    const idx = focusedIndexRef.current;
+    const targetButton = NAV_BUTTONS[idx];
+    if (targetButton) {
+      announce(`Selecting: ${targetButton.label}`);
       setTimeout(() => {
         navigate(targetButton.path);
-      }, 500);
+      }, 600);
     }
-  }, [isCalibrated, isTracking, focusedIndex, announce, navigate]);
+  }, [blinkCount, announce, navigate]);
 
+  // ===== HEAD DIRECTION HANDLER =====
+  useEffect(() => {
+    if (!isTrackingRef.current || !isCalibratedRef.current) return;
+    if (headDirection === prevDirectionRef.current) return;
+
+    prevDirectionRef.current = headDirection;
+
+    if (headDirection === "Left") {
+      setFocusedIndex((prev) => Math.max(0, prev - 1));
+      setCursorPos(prev => ({ ...prev, x: Math.max(0, prev.x - 10) }));
+    } else if (headDirection === "Right") {
+      setFocusedIndex((prev) => Math.min(NAV_BUTTONS.length - 1, prev + 1));
+      setCursorPos(prev => ({ ...prev, x: Math.min(100, prev.x + 10) }));
+    } else if (headDirection === "Up") {
+      setCursorPos(prev => ({ ...prev, y: Math.max(0, prev.y - 10) }));
+      window.scrollBy({ top: -200, behavior: "smooth" });
+    } else if (headDirection === "Down") {
+      setCursorPos(prev => ({ ...prev, y: Math.min(100, prev.y + 10) }));
+      window.scrollBy({ top: 200, behavior: "smooth" });
+    }
+  }, [headDirection]);
+
+  // ===== STATUS UPDATES =====
+  useEffect(() => {
+    if (isLoading && isTracking) setStatus("Loading Model");
+    else if (isReady && isTracking) setStatus("Tracking Active");
+    else if (!isTracking) setStatus("Camera Off");
+  }, [isLoading, isReady, isTracking]);
+
+  // ===== KEYBOARD FALLBACK =====
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isTrackingRef.current) return;
+
+      switch (e.key.toLowerCase()) {
+        case "b": {
+          // Simulate blink
+          setBlinkFlash(true);
+          setTimeout(() => setBlinkFlash(false), 350);
+
+          if (!isCalibratedRef.current) {
+            const nextCal = calibrationBlinksRef.current + 1;
+            setCalibrationBlinks(nextCal);
+            if (nextCal >= 3) {
+              setIsCalibrated(true);
+              announce("Calibration complete via keyboard.");
+            } else {
+              announce(`Step ${nextCal} of 3. Press B again.`);
+            }
+          } else {
+            const idx = focusedIndexRef.current;
+            const targetButton = NAV_BUTTONS[idx];
+            if (targetButton) {
+              announce(`Navigating to ${targetButton.label}`);
+              setTimeout(() => navigate(targetButton.path), 500);
+            }
+          }
+          break;
+        }
+        case "arrowleft":
+          e.preventDefault();
+          setFocusedIndex((prev) => Math.max(0, prev - 1));
+          setCursorPos(prev => ({ ...prev, x: Math.max(0, prev.x - 5) }));
+          break;
+        case "arrowright":
+          e.preventDefault();
+          setFocusedIndex((prev) => Math.min(NAV_BUTTONS.length - 1, prev + 1));
+          setCursorPos(prev => ({ ...prev, x: Math.min(100, prev.x + 5) }));
+          break;
+        case "arrowup":
+          e.preventDefault();
+          window.scrollBy({ top: -150, behavior: "smooth" });
+          setCursorPos(prev => ({ ...prev, y: Math.max(0, prev.y - 5) }));
+          break;
+        case "arrowdown":
+          e.preventDefault();
+          window.scrollBy({ top: 150, behavior: "smooth" });
+          setCursorPos(prev => ({ ...prev, y: Math.min(100, prev.y + 5) }));
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [announce, navigate]);
+
+  // ===== TOGGLE TRACKING =====
   const toggleTracking = async () => {
     if (isTracking) {
+      stopFaceMesh();
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
         setStream(null);
       }
       setIsTracking(false);
+      setIsCalibrated(false);
+      setCalibrationBlinks(0);
       setStatus("Camera Off");
+      prevBlinkCountRef.current = 0;
       announce("Eye tracking disabled.");
     } else {
       try {
-        const newStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        const newStream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 640, height: 480, facingMode: "user" }
+        });
         if (videoRef.current) {
           videoRef.current.srcObject = newStream;
+          // Wait for the video to actually start playing
+          await new Promise<void>((resolve) => {
+            const v = videoRef.current!;
+            const onPlaying = () => {
+              v.removeEventListener("playing", onPlaying);
+              resolve();
+            };
+            v.addEventListener("playing", onPlaying);
+            v.play().catch(() => resolve());
+          });
+          // Now start face mesh after video is confirmed playing
+          startFaceMesh(videoRef.current);
         }
         setStream(newStream);
         setIsTracking(true);
-        setStatus("Tracking Active");
-        announce("Eye tracking enabled. Please calibrate by blinking twice.");
+        announce("Camera active. Loading face detection model, please wait.");
       } catch (err) {
         console.error("Error accessing webcam:", err);
         announce("Error accessing camera. Please check permissions.");
@@ -93,58 +238,16 @@ export default function EyeControl() {
     }
   };
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (!isTracking) return;
-
-      switch (e.key.toLowerCase()) {
-        case "b":
-          handleBlink();
-          break;
-        case "arrowleft":
-          setHeadDirection("Left");
-          announce("Head moved Left");
-          setFocusedIndex((prev) => (prev > 0 ? prev - 1 : prev));
-          setCursorPos(prev => ({ ...prev, x: Math.max(0, prev.x - 5) }));
-          break;
-        case "arrowright":
-          setHeadDirection("Right");
-          announce("Head moved Right");
-          setFocusedIndex((prev) => (prev < navButtons.length - 1 ? prev + 1 : prev));
-          setCursorPos(prev => ({ ...prev, x: Math.min(100, prev.x + 5) }));
-          break;
-        case "arrowup":
-          setHeadDirection("Up");
-          announce("Head moved Up");
-          window.scrollBy({ top: -150, behavior: "smooth" });
-          setCursorPos(prev => ({ ...prev, y: Math.max(0, prev.y - 5) }));
-          break;
-        case "arrowdown":
-          setHeadDirection("Down");
-          announce("Head moved Down");
-          window.scrollBy({ top: 150, behavior: "smooth" });
-          setCursorPos(prev => ({ ...prev, y: Math.min(100, prev.y + 5) }));
-          break;
-      }
-    };
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (["arrowleft", "arrowright", "arrowup", "arrowdown"].includes(e.key.toLowerCase())) {
-        setHeadDirection("Center");
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
-    };
-  }, [isTracking, handleBlink, navButtons.length]);
+  // EAR bar color
+  const getEarColor = (ear: number) => {
+    if (ear < 0.17) return "#FF4444";
+    if (ear < 0.22) return "#FFaa00";
+    return "#00FFFF";
+  };
 
   return (
     <div className="min-h-screen bg-[#0a0a0c] text-white selection:bg-[#00FFFF]/30 pt-32 pb-20 px-6 overflow-x-hidden">
-      {/* Gaze Cursor Simulation */}
+      {/* Gaze Cursor */}
       {isTracking && isCalibrated && (
         <motion.div 
           animate={{ x: `${cursorPos.x}vw`, y: `${cursorPos.y}vh` }}
@@ -160,6 +263,7 @@ export default function EyeControl() {
       )}
 
       <div className="max-w-6xl mx-auto space-y-12">
+        {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
           <Link to="/" className="inline-flex items-center gap-2 text-[10px] font-mono font-bold uppercase tracking-widest text-white/40 hover:text-[#00FFFF] transition-colors">
             <ArrowLeft className="w-4 h-4" />
@@ -168,11 +272,7 @@ export default function EyeControl() {
 
           <div className="flex items-center gap-4">
             <div className="relative group">
-              <Button 
-                variant="outline" 
-                size="sm"
-                className="bg-white/5 border-white/10 text-white/60 hover:text-white"
-              >
+              <Button variant="outline" size="sm" className="bg-white/5 border-white/10 text-white/60 hover:text-white">
                 <Languages className="w-4 h-4 mr-2" />
                 {LANGUAGES[lang]}
                 <ChevronDown className="w-3 h-3 ml-2" />
@@ -195,7 +295,7 @@ export default function EyeControl() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start">
-          {/* Left Column: Info & Controls */}
+          {/* Left Column */}
           <div className="space-y-8">
             <div className="space-y-6">
               <div className="w-16 h-16 rounded-2xl bg-[#00FFFF]/20 border border-[#00FFFF]/40 flex items-center justify-center">
@@ -203,17 +303,25 @@ export default function EyeControl() {
               </div>
               <h1 className="text-5xl font-black tracking-tighter uppercase leading-none">
                 Eye Control <br />
-                <span className="text-[#00FFFF]">Navigation</span>
+                <span className="text-[#00FFFF]">Zero Touch</span>
               </h1>
               <p className="text-xl text-white/50 max-w-2xl leading-relaxed">
-                Hands-free navigation designed for accessibility. Control the interface using blinks and head movements.
+                Truly hands-free navigation powered by <span className="text-white font-semibold">MediaPipe Face Mesh</span>. 
+                Real-time blink detection and head pose estimation — no keyboard needed.
               </p>
             </div>
 
+            {/* Controls Panel */}
             <div className="p-8 bg-[#151619] rounded-3xl border border-white/5 space-y-6">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className={`w-3 h-3 rounded-full ${isTracking ? "bg-[#00FFFF] shadow-[0_0_10px_#00FFFF]" : "bg-white/20"}`} />
+                  <div className={`w-3 h-3 rounded-full transition-all duration-300 ${
+                    status === "Tracking Active" 
+                      ? "bg-[#00FFFF] shadow-[0_0_10px_#00FFFF]" 
+                      : status === "Loading Model" 
+                        ? "bg-yellow-400 shadow-[0_0_10px_#FFaa00] animate-pulse"
+                        : "bg-white/20"
+                  }`} />
                   <span className="font-mono text-sm uppercase tracking-wider">{status}</span>
                 </div>
                 <Button 
@@ -226,114 +334,235 @@ export default function EyeControl() {
                 </Button>
               </div>
 
-              {!isCalibrated && isTracking && (
-                <div className="p-4 bg-[#00FFFF]/10 border border-[#00FFFF]/20 rounded-2xl flex items-center gap-4 animate-pulse">
-                  <RefreshCw className="w-5 h-5 text-[#00FFFF] animate-spin" />
-                  <p className="text-sm font-bold text-[#00FFFF]">
-                    CALIBRATION: Press 'B' twice to calibrate blink detection. ({calibrationStep}/2)
-                  </p>
-                </div>
+              {/* Loading state */}
+              {isLoading && isTracking && (
+                <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+                  className="p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-2xl flex items-center gap-4">
+                  <Loader2 className="w-5 h-5 text-yellow-400 animate-spin" />
+                  <div>
+                    <p className="text-sm font-bold text-yellow-400">LOADING FACE MESH MODEL</p>
+                    <p className="text-xs text-yellow-400/60 mt-1">Downloading neural network (~4MB)... One-time download.</p>
+                  </div>
+                </motion.div>
               )}
 
+              {/* Calibration prompt */}
+              {!isCalibrated && isTracking && isReady && (
+                <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+                  className="p-4 bg-[#00FFFF]/10 border border-[#00FFFF]/20 rounded-2xl flex items-center gap-4">
+                  <RefreshCw className="w-5 h-5 text-[#00FFFF] animate-spin" />
+                  <div>
+                    <p className="text-sm font-bold text-[#00FFFF]">
+                      CALIBRATION: Blink {3 - calibrationBlinks} more time{3 - calibrationBlinks !== 1 ? "s" : ""}
+                    </p>
+                    <p className="text-xs text-[#00FFFF]/60 mt-1">Look at the camera and blink deliberately (close both eyes for a moment).</p>
+                    <div className="flex gap-2 mt-2">
+                      {[0, 1, 2].map(i => (
+                        <div key={i} className={`w-3 h-3 rounded-full transition-all duration-300 ${
+                          i < calibrationBlinks 
+                            ? "bg-[#00FFFF] shadow-[0_0_8px_#00FFFF]" 
+                            : "bg-white/10 border border-white/20"}`} />
+                      ))}
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+
+              {/* Calibrated */}
               {isCalibrated && (
-                <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-2xl flex items-center gap-4">
+                <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
+                  className="p-4 bg-green-500/10 border border-green-500/20 rounded-2xl flex items-center gap-4">
                   <CheckCircle2 className="w-5 h-5 text-green-500" />
-                  <p className="text-sm font-bold text-green-500 uppercase tracking-widest">
-                    System Calibrated & Active
-                  </p>
-                </div>
+                  <div>
+                    <p className="text-sm font-bold text-green-500 uppercase tracking-widest">System Calibrated & Active</p>
+                    <p className="text-xs text-green-500/60 mt-1">Move head to navigate • Blink to select</p>
+                  </div>
+                </motion.div>
               )}
             </div>
+
+            {/* Live Telemetry */}
+            {isTracking && isReady && (
+              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+                className="p-6 bg-[#151619] rounded-2xl border border-white/5 space-y-4">
+                <div className="flex items-center gap-2 text-[#00FFFF]">
+                  <Activity className="w-4 h-4" />
+                  <span className="text-xs font-bold uppercase tracking-widest">Live Telemetry</span>
+                </div>
+
+                {/* EAR Meter */}
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[10px] font-mono text-white/40 uppercase">Eye Aspect Ratio</span>
+                    <span className="text-sm font-mono font-bold" style={{ color: getEarColor(earValue) }}>
+                      {earValue.toFixed(3)}
+                    </span>
+                  </div>
+                  <div className="h-2 bg-white/5 rounded-full overflow-hidden">
+                    <motion.div
+                      animate={{ width: `${Math.min(100, (earValue / 0.4) * 100)}%` }}
+                      transition={{ duration: 0.1 }}
+                      className="h-full rounded-full"
+                      style={{ backgroundColor: getEarColor(earValue) }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[9px] font-mono text-white/20">
+                    <span>CLOSED (0.00)</span>
+                    <span className="text-yellow-500/50">THRESHOLD (0.20)</span>
+                    <span>OPEN (0.40)</span>
+                  </div>
+                </div>
+
+                {/* Stats row */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="p-3 bg-white/5 rounded-xl text-center">
+                    <p className="text-2xl font-black text-[#00FFFF]">{blinkCount}</p>
+                    <p className="text-[9px] font-mono text-white/30 uppercase mt-1">Blinks</p>
+                  </div>
+                  <div className="p-3 bg-white/5 rounded-xl text-center">
+                    <p className={`text-lg font-black ${headDirection !== "Center" ? "text-[#00FFFF]" : "text-white/40"}`}>
+                      {headDirection}
+                    </p>
+                    <p className="text-[9px] font-mono text-white/30 uppercase mt-1">Direction</p>
+                  </div>
+                  <div className="p-3 bg-white/5 rounded-xl text-center">
+                    <p className={`text-2xl font-black ${isCalibrated ? "text-green-500" : "text-yellow-400"}`}>
+                      {isCalibrated ? "ON" : "CAL"}
+                    </p>
+                    <p className="text-[9px] font-mono text-white/30 uppercase mt-1">Status</p>
+                  </div>
+                </div>
+              </motion.div>
+            )}
 
             {/* Interaction Guide */}
             <div className="grid grid-cols-2 gap-4">
               <div className="p-6 bg-[#151619] rounded-2xl border border-white/5 space-y-2">
                 <div className="flex items-center gap-2 text-[#00FFFF]">
                   <Zap className="w-4 h-4" />
-                  <span className="text-xs font-bold uppercase tracking-widest">Blink (Key B)</span>
+                  <span className="text-xs font-bold uppercase tracking-widest">Blink</span>
                 </div>
-                <p className="text-sm text-white/40">Select / Click focused element</p>
+                <p className="text-sm text-white/40">Close both eyes briefly to select the focused item.</p>
+                <p className="text-[9px] font-mono text-white/20 mt-2">Fallback: Press B key</p>
               </div>
               <div className="p-6 bg-[#151619] rounded-2xl border border-white/5 space-y-2">
                 <div className="flex items-center gap-2 text-[#00FFFF]">
                   <MousePointer2 className="w-4 h-4" />
-                  <span className="text-xs font-bold uppercase tracking-widest">Head (Arrows)</span>
+                  <span className="text-xs font-bold uppercase tracking-widest">Head Move</span>
                 </div>
-                <p className="text-sm text-white/40">Navigate focus and scroll page</p>
+                <p className="text-sm text-white/40">Turn head left/right to cycle items, up/down to scroll.</p>
+                <p className="text-[9px] font-mono text-white/20 mt-2">Fallback: Arrow keys</p>
               </div>
             </div>
           </div>
 
-          {/* Right Column: Visual Feedback & Camera */}
+          {/* Right Column: Camera & Nav */}
           <div className="space-y-6 sticky top-32">
+            {/* Camera Feed */}
             <div className="relative aspect-video bg-black rounded-[40px] overflow-hidden border-2 border-white/10 shadow-2xl group">
               <video 
                 ref={videoRef}
                 autoPlay 
                 playsInline 
                 muted 
-                className="w-full h-full object-cover grayscale opacity-60 group-hover:opacity-100 transition-opacity"
+                className="w-full h-full object-cover"
+                style={{ transform: "scaleX(-1)" }}
               />
               
-              {/* Overlay Feedback */}
+              {/* Camera off placeholder */}
+              {!isTracking && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0a0a0c]">
+                  <Scan className="w-16 h-16 text-white/10 mb-4" />
+                  <p className="text-sm font-mono text-white/20 uppercase tracking-widest">Camera Off</p>
+                  <p className="text-xs text-white/10 mt-2">Click "Enable Eye Tracking" to begin</p>
+                </div>
+              )}
+
+              {/* Face tracking box overlay */}
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                {/* Simulated Face Tracking Box */}
-                {isTracking && (
+                {isTracking && isReady && (
                   <motion.div 
                     animate={{ 
-                      x: headDirection === "Left" ? -50 : headDirection === "Right" ? 50 : 0,
-                      y: headDirection === "Up" ? -50 : headDirection === "Down" ? 50 : 0,
+                      x: headDirection === "Left" ? -40 : headDirection === "Right" ? 40 : 0,
+                      y: headDirection === "Up" ? -40 : headDirection === "Down" ? 40 : 0,
                     }}
-                    className="w-48 h-48 border-2 border-[#00FFFF]/50 rounded-3xl flex items-center justify-center"
+                    transition={{ type: "spring", damping: 15, stiffness: 80 }}
+                    className="w-48 h-48 border-2 border-[#00FFFF]/50 rounded-3xl flex items-center justify-center relative"
                   >
                     <div className="w-2 h-2 bg-[#00FFFF] rounded-full" />
-                    {/* Corner accents */}
                     <div className="absolute top-0 left-0 w-4 h-4 border-t-2 border-l-2 border-[#00FFFF]" />
                     <div className="absolute top-0 right-0 w-4 h-4 border-t-2 border-r-2 border-[#00FFFF]" />
                     <div className="absolute bottom-0 left-0 w-4 h-4 border-b-2 border-l-2 border-[#00FFFF]" />
                     <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-[#00FFFF]" />
                   </motion.div>
                 )}
+
+                {isLoading && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm">
+                    <Loader2 className="w-12 h-12 text-[#00FFFF] animate-spin mb-3" />
+                    <p className="text-xs font-mono text-[#00FFFF] uppercase tracking-widest">Initializing Face Mesh</p>
+                  </div>
+                )}
               </div>
 
-              {/* Status HUD */}
+              {/* HUD bottom bar */}
               <div className="absolute bottom-6 left-6 right-6 flex items-center justify-between">
                 <AnimatePresence>
-                  {blinkDetected && (
+                  {blinkFlash && (
                     <motion.div 
                       initial={{ scale: 0.8, opacity: 0 }}
                       animate={{ scale: 1, opacity: 1 }}
                       exit={{ scale: 0.8, opacity: 0 }}
                       className="px-4 py-2 bg-[#00FFFF] text-black font-black text-xs uppercase tracking-[0.2em] rounded-full shadow-[0_0_20px_#00FFFF]"
                     >
-                      Blink Detected
+                      👁️ Blink Detected!
                     </motion.div>
                   )}
                 </AnimatePresence>
                 
-                <div className="px-4 py-2 bg-black/80 backdrop-blur-md border border-white/10 rounded-full flex items-center gap-3">
-                  <span className="text-[10px] font-mono text-white/40 uppercase">Direction:</span>
-                  <span className="text-[10px] font-mono text-[#00FFFF] uppercase font-bold">{headDirection}</span>
-                </div>
+                {isTracking && isReady && (
+                  <div className="px-4 py-2 bg-black/80 backdrop-blur-md border border-white/10 rounded-full flex items-center gap-3 ml-auto">
+                    <span className="text-[10px] font-mono text-white/40 uppercase">Dir:</span>
+                    <span className={`text-[10px] font-mono uppercase font-bold ${headDirection !== "Center" ? "text-[#00FFFF]" : "text-white/30"}`}>
+                      {headDirection}
+                    </span>
+                    <span className="text-[10px] font-mono text-white/20">|</span>
+                    <span className="text-[10px] font-mono text-white/40 uppercase">EAR:</span>
+                    <span className="text-[10px] font-mono font-bold" style={{ color: getEarColor(earValue) }}>
+                      {earValue.toFixed(2)}
+                    </span>
+                  </div>
+                )}
               </div>
+
+              {/* Top-left badge */}
+              {isTracking && isReady && (
+                <div className="absolute top-4 left-4 px-3 py-1.5 bg-black/60 backdrop-blur-md border border-[#00FFFF]/30 rounded-full flex items-center gap-2">
+                  <div className="w-2 h-2 bg-[#00FFFF] rounded-full animate-pulse" />
+                  <span className="text-[9px] font-mono text-[#00FFFF] uppercase tracking-wider font-bold">MediaPipe Active</span>
+                </div>
+              )}
             </div>
 
-            {/* Sample Interaction Elements */}
+            {/* Navigation Menu */}
             <div className="space-y-4">
-              <h3 className="text-xs font-bold uppercase tracking-[0.3em] text-white/30 px-4">Navigation Menu</h3>
+              <h3 className="text-xs font-bold uppercase tracking-[0.3em] text-white/30 px-4">
+                Navigation Menu {isCalibrated && "— Blink to Select"}
+              </h3>
               <div className="grid grid-cols-1 gap-3">
-                {navButtons.map((btn, idx) => (
+                {NAV_BUTTONS.map((btn, idx) => (
                   <motion.div
                     key={btn.label}
                     animate={{ 
                       scale: focusedIndex === idx ? 1.02 : 1,
                       x: focusedIndex === idx ? 10 : 0
                     }}
-                    className={`p-6 rounded-2xl border-2 transition-all flex items-center justify-between group ${
+                    className={`p-6 rounded-2xl border-2 transition-all flex items-center justify-between group cursor-pointer ${
                       focusedIndex === idx 
                         ? "bg-[#00FFFF]/10 border-[#00FFFF] shadow-[0_0_30px_rgba(0,255,255,0.1)]" 
                         : "bg-[#151619] border-white/5 hover:border-white/10"
                     }`}
+                    onClick={() => navigate(btn.path)}
                   >
                     <div className="flex items-center gap-4">
                       <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors ${
@@ -350,11 +579,14 @@ export default function EyeControl() {
                         {btn.label}
                       </span>
                     </div>
-                    {focusedIndex === idx && (
+                    {focusedIndex === idx && isCalibrated && (
                       <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-mono text-[#00FFFF] uppercase animate-pulse">Ready to Blink</span>
+                        <span className="text-[10px] font-mono text-[#00FFFF] uppercase animate-pulse">Blink to Select</span>
                         <ChevronRight className="w-5 h-5 text-[#00FFFF]" />
                       </div>
+                    )}
+                    {focusedIndex === idx && !isCalibrated && isTracking && (
+                      <span className="text-[10px] font-mono text-white/30 uppercase">Calibrate First</span>
                     )}
                   </motion.div>
                 ))}
@@ -363,42 +595,43 @@ export default function EyeControl() {
           </div>
         </div>
 
-        {/* Technical Note */}
+        {/* Tech Stack Section */}
         <div className="p-12 bg-[#151619] rounded-[40px] border border-white/5">
           <div className="max-w-3xl mx-auto space-y-6 text-center">
-            <h2 className="text-2xl font-bold uppercase tracking-tighter">Implementation Roadmap</h2>
+            <h2 className="text-2xl font-bold uppercase tracking-tighter">Technology Stack</h2>
             <p className="text-white/40 leading-relaxed">
-              This prototype simulates AI-driven navigation. In a production environment, we would integrate 
-              <span className="text-white"> MediaPipe Face Mesh</span> or <span className="text-white">TensorFlow.js</span> to 
-              perform real-time landmark detection.
+              Powered by <span className="text-white">MediaPipe Face Mesh</span> with 468 facial landmarks, 
+              computing <span className="text-white">Eye Aspect Ratio (EAR)</span> for blink detection and 
+              <span className="text-white"> head pose estimation</span> for directional control.
             </p>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-left">
-              <div className="space-y-2">
-                <h4 className="text-[#00FFFF] font-bold text-sm">Landmark Detection</h4>
-                <p className="text-xs text-white/30">Track 468+ facial landmarks to determine eye aspect ratio (EAR) for blink detection.</p>
-              </div>
-              <div className="space-y-2">
-                <h4 className="text-[#00FFFF] font-bold text-sm">Head Pose Estimation</h4>
-                <p className="text-xs text-white/30">Calculate pitch, yaw, and roll from face landmarks to determine head direction.</p>
-              </div>
-              <div className="space-y-2">
-                <h4 className="text-[#00FFFF] font-bold text-sm">Gaze Prediction</h4>
-                <p className="text-xs text-white/30">Use eye-region crops and neural networks to predict screen coordinates of the user's gaze.</p>
-              </div>
+              {[
+                { title: "Blink Detection", desc: "EAR from 6 landmarks per eye. Detects natural blinks with frame-level precision." },
+                { title: "Head Pose Estimation", desc: "Yaw/pitch from nose, forehead, chin, cheek landmarks → Up/Down/Left/Right." },
+                { title: "Gaze Cursor", desc: "Virtual cursor tracks head position with spring physics for smooth visual feedback." },
+              ].map(item => (
+                <div key={item.title} className="space-y-2 p-4 rounded-2xl bg-green-500/5 border border-green-500/10">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-green-500" />
+                    <h4 className="text-green-400 font-bold text-sm">{item.title}</h4>
+                  </div>
+                  <p className="text-xs text-white/30">{item.desc}</p>
+                </div>
+              ))}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Directional Indicators (Visual Only) */}
-      <div className="fixed bottom-8 right-8 flex flex-col items-center gap-2 pointer-events-none opacity-20">
-        <ChevronUp className={`w-8 h-8 ${headDirection === "Up" ? "text-[#00FFFF] opacity-100" : "text-white"}`} />
+      {/* Direction Indicators */}
+      <div className="fixed bottom-8 right-8 flex flex-col items-center gap-2 pointer-events-none opacity-30">
+        <ChevronUp className={`w-8 h-8 transition-all ${headDirection === "Up" ? "text-[#00FFFF] opacity-100 scale-125" : "text-white"}`} />
         <div className="flex gap-2">
-          <ChevronLeft className={`w-8 h-8 ${headDirection === "Left" ? "text-[#00FFFF] opacity-100" : "text-white"}`} />
-          <div className="w-8 h-8 rounded-full border-2 border-white/20" />
-          <ChevronRight className={`w-8 h-8 ${headDirection === "Right" ? "text-[#00FFFF] opacity-100" : "text-white"}`} />
+          <ChevronLeft className={`w-8 h-8 transition-all ${headDirection === "Left" ? "text-[#00FFFF] opacity-100 scale-125" : "text-white"}`} />
+          <div className={`w-8 h-8 rounded-full border-2 transition-all ${headDirection === "Center" ? "border-[#00FFFF] bg-[#00FFFF]/20" : "border-white/20"}`} />
+          <ChevronRight className={`w-8 h-8 transition-all ${headDirection === "Right" ? "text-[#00FFFF] opacity-100 scale-125" : "text-white"}`} />
         </div>
-        <ChevronDown className={`w-8 h-8 ${headDirection === "Down" ? "text-[#00FFFF] opacity-100" : "text-white"}`} />
+        <ChevronDown className={`w-8 h-8 transition-all ${headDirection === "Down" ? "text-[#00FFFF] opacity-100 scale-125" : "text-white"}`} />
       </div>
     </div>
   );

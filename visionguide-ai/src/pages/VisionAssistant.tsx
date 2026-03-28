@@ -1,13 +1,11 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { CameraView } from "../components/CameraView";
 import { DetectionOverlay } from "../components/DetectionOverlay";
-import { NavigationPanel } from "../components/NavigationPanel";
-import { RPMAvatar } from "../components/RPMAvatar";
 import { useObjectDetection } from "../hooks/useObjectDetection";
 import { useSpeech } from "../hooks/useSpeech";
 import { useVoiceAssistant } from "../hooks/useVoiceAssistant";
 import { getNavigationInstruction } from "../utils/navigation";
-import { Eye, Settings, Info, Loader2, Languages, ChevronDown, ShieldAlert, Sparkles } from "lucide-react";
+import { Eye, Settings, Info, Loader2, Languages, ChevronDown, ShieldAlert, Sparkles, Navigation, AlertCircle } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { SALanguage, LANGUAGES, TRANSLATIONS } from "../types";
 import { translateText, simplifyExplanation, getAvatarResponse } from "../services/geminiService";
@@ -30,7 +28,7 @@ export default function VisionAssistant() {
   const handleVoiceCommand = useCallback(async (command: string) => {
     console.log("Voice command received:", command);
     setIsThinking(true);
-    
+
     // Use Gemini to understand the command better
     const { text: smartResponse, translatedText: translated } = await getAvatarResponse(command, lang);
     speak(smartResponse);
@@ -59,7 +57,7 @@ export default function VisionAssistant() {
     const processInstruction = async () => {
       if (detections.length > 0 && videoRef.current) {
         let newInstruction = getNavigationInstruction(detections, videoRef.current.videoWidth, lang);
-        
+
         if (!newInstruction) {
           setInstruction(null);
           return;
@@ -77,7 +75,7 @@ export default function VisionAssistant() {
           setInstruction(newInstruction);
           speak(newInstruction);
           lastSpokenRef.current = newInstruction;
-          
+
           if (lang !== "en-ZA") {
             const translated = await translateText(newInstruction, lang);
             setTimeout(() => speak(translated, lang), 1500);
@@ -103,8 +101,8 @@ export default function VisionAssistant() {
   return (
     <div className="min-h-screen bg-[#0a0a0c] text-white selection:bg-[#00FF00]/30 pt-20">
       {/* Main Content */}
-      <main className="pb-12 px-6 max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-3 flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
+      <main className="pb-12 px-6 max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-3 flex flex-col md:flex-row md:items-center justify-between gap-6 mb-4">
           <div className="space-y-2">
             <h1 className="text-4xl font-black tracking-tighter uppercase">
               Vision<span className="text-[#00FF00]">Assistant</span>
@@ -114,8 +112,8 @@ export default function VisionAssistant() {
 
           <div className="flex items-center gap-4">
             <div className="relative group">
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 size="sm"
                 className="bg-white/5 border-white/10 text-white/60 hover:text-white"
               >
@@ -128,9 +126,8 @@ export default function VisionAssistant() {
                   <button
                     key={l}
                     onClick={() => setLang(l)}
-                    className={`w-full text-left px-4 py-3 text-xs font-mono uppercase tracking-wider hover:bg-white/5 transition-colors ${
-                      lang === l ? "text-[#00FF00]" : "text-white/60"
-                    }`}
+                    className={`w-full text-left px-4 py-3 text-xs font-mono uppercase tracking-wider hover:bg-white/5 transition-colors ${lang === l ? "text-[#00FF00]" : "text-white/60"
+                      }`}
                   >
                     {LANGUAGES[l]}
                   </button>
@@ -141,17 +138,17 @@ export default function VisionAssistant() {
         </div>
 
         {/* Camera Section */}
-        <div className="lg:col-span-2 space-y-6">
-          <div className="relative aspect-video w-full rounded-[32px] overflow-hidden border border-white/10 shadow-2xl bg-black">
-            <CameraView 
-              videoRef={videoRef} 
-              onStreamReady={() => setCameraReady(prev => prev + 1)} 
+        <div className="lg:col-span-3 space-y-4">
+          <div className="relative h-[45vh] min-h-[300px] w-full rounded-[32px] overflow-hidden border border-white/10 shadow-2xl bg-black">
+            <CameraView
+              videoRef={videoRef}
+              onStreamReady={() => setCameraReady(prev => prev + 1)}
             />
             <DetectionOverlay detections={detections} videoRef={videoRef} />
-            
+
             <AnimatePresence>
               {isLoading && (
-                <motion.div 
+                <motion.div
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
@@ -168,7 +165,7 @@ export default function VisionAssistant() {
             {/* Critical Obstacle Alert */}
             <AnimatePresence>
               {instruction?.toLowerCase().includes("obstacle") && (
-                <motion.div 
+                <motion.div
                   initial={{ opacity: 0, scale: 0.9 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.9 }}
@@ -201,46 +198,45 @@ export default function VisionAssistant() {
               </div>
             ))}
           </div>
-        </div>
 
-        {/* Avatar & Navigation Section */}
-        <div className="space-y-6">
-          {/* Ready Player Me Avatar */}
-          <div className="aspect-square w-full">
-            <RPMAvatar isThinking={isThinking} />
-          </div>
-
-          <NavigationPanel 
-            instruction={instruction} 
-            destination={destination}
-            onDestinationChange={setDestination}
-            lang={lang}
-            onLanguageChange={setLang}
-            isListening={isListening}
-            onStartListening={startListening}
-          />
-          
-          <div className="p-6 bg-[#151619] rounded-2xl border border-white/10 shadow-xl space-y-4">
+          {/* Compact Navigation Card */}
+          <div className="p-4 bg-[#151619] rounded-2xl border border-white/10 shadow-xl space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-[10px] font-mono uppercase tracking-wider text-white/30">
-                System Status
-              </h3>
-              <Sparkles className="w-3 h-3 text-[#00FF00]" />
-            </div>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-mono text-white/50">TF.js WebGL</span>
-                <span className="text-xs font-mono text-[#00FF00]">Enabled</span>
+              <div className="flex items-center gap-2">
+                <Navigation className="w-5 h-5 text-[#00FF00]" />
+                <span className="text-[10px] font-mono uppercase tracking-wider text-white/50">
+                  Navigation System
+                </span>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-mono text-white/50">COCO-SSD Lite</span>
-                <span className="text-xs font-mono text-[#00FF00]">Ready</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-mono text-white/50">RPM Avatar</span>
-                <span className="text-xs font-mono text-[#00FF00]">Active</span>
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-[#00FF00] animate-pulse" />
+                <span className="text-[10px] font-mono uppercase tracking-wider text-[#00FF00]">
+                  Live Active
+                </span>
               </div>
             </div>
+
+            <motion.div
+              initial={false}
+              animate={{
+                backgroundColor: instruction ? "rgba(0, 255, 0, 0.1)" : "rgba(255, 255, 255, 0.02)",
+                borderColor: instruction ? "rgba(0, 255, 0, 0.3)" : "rgba(255, 255, 255, 0.1)",
+              }}
+              className="min-h-[80px] flex flex-col items-center justify-center p-4 rounded-xl border border-dashed text-center transition-colors"
+            >
+              {instruction ? (
+                <>
+                  <AlertCircle className="w-8 h-8 text-[#00FF00] mb-3" />
+                  <p className="text-lg font-mono font-medium text-white tracking-tight leading-tight">
+                    {instruction}
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm font-mono text-white/30">
+                  {t.scanning}
+                </p>
+              )}
+            </motion.div>
           </div>
         </div>
       </main>
