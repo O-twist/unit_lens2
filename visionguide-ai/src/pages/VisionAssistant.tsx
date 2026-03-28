@@ -2,7 +2,6 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import { CameraView } from "../components/CameraView";
 import { DetectionOverlay } from "../components/DetectionOverlay";
 import { NavigationPanel } from "../components/NavigationPanel";
-import { RPMAvatar } from "../components/RPMAvatar";
 import { useObjectDetection } from "../hooks/useObjectDetection";
 import { useSpeech } from "../hooks/useSpeech";
 import { useVoiceAssistant } from "../hooks/useVoiceAssistant";
@@ -10,7 +9,6 @@ import { getNavigationInstruction } from "../utils/navigation";
 import { Eye, Settings, Info, Loader2, Languages, ChevronDown, ShieldAlert, Sparkles } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { SALanguage, LANGUAGES, TRANSLATIONS } from "../types";
-import { translateText, simplifyExplanation, getAvatarResponse } from "../services/geminiService";
 import { Button } from "../components/Button";
 
 export default function VisionAssistant() {
@@ -21,23 +19,13 @@ export default function VisionAssistant() {
   const { speak } = useSpeech(3000, lang); // 3s cooldown for more frequent updates
   const [destination, setDestination] = useState("");
   const [instruction, setInstruction] = useState<string | null>(null);
-  const [isThinking, setIsThinking] = useState(false);
   const lastSpokenRef = useRef<string | null>(null);
 
   const t = TRANSLATIONS[lang];
 
   // Handle voice commands
-  const handleVoiceCommand = useCallback(async (command: string) => {
+  const handleVoiceCommand = useCallback((command: string) => {
     console.log("Voice command received:", command);
-    setIsThinking(true);
-    
-    // Use Gemini to understand the command better
-    const { text: smartResponse, translatedText: translated } = await getAvatarResponse(command, lang);
-    speak(smartResponse);
-    if (lang !== "en-ZA" && translated) {
-      setTimeout(() => speak(translated, lang), 1500);
-    }
-    setIsThinking(false);
 
     if (command.includes("navigate to") || command.includes("hamba uya e") || command.includes("hamba ekunene")) {
       const dest = command.split(/navigate to|hamba uya e|hamba ekunene/i)[1]?.trim();
@@ -47,7 +35,7 @@ export default function VisionAssistant() {
     } else if (command.includes("stop") || command.includes("yima")) {
       setDestination("");
     }
-  }, [lang, speak]);
+  }, []);
 
   const { isListening, startListening } = useVoiceAssistant({
     onCommand: handleVoiceCommand,
@@ -56,9 +44,9 @@ export default function VisionAssistant() {
 
   // Process navigation instructions
   useEffect(() => {
-    const processInstruction = async () => {
+    const processInstruction = () => {
       if (detections.length > 0 && videoRef.current) {
-        let newInstruction = getNavigationInstruction(detections, videoRef.current.videoWidth, lang);
+        const newInstruction = getNavigationInstruction(detections, videoRef.current.videoWidth, lang);
         
         if (!newInstruction) {
           setInstruction(null);
@@ -66,24 +54,10 @@ export default function VisionAssistant() {
         }
 
         // Only process if it's a new instruction
-        if (newInstruction && newInstruction !== lastSpokenRef.current) {
-          // Use Gemini to simplify/improve instruction if it's complex
-          if (newInstruction.length > 30) {
-            setIsThinking(true);
-            newInstruction = await simplifyExplanation(newInstruction, lang);
-            setIsThinking(false);
-          }
-
+        if (newInstruction !== lastSpokenRef.current) {
           setInstruction(newInstruction);
           speak(newInstruction);
           lastSpokenRef.current = newInstruction;
-          
-          if (lang !== "en-ZA") {
-            const translated = await translateText(newInstruction, lang);
-            setTimeout(() => speak(translated, lang), 1500);
-          }
-        } else if (!newInstruction) {
-          setInstruction(null);
         }
       } else {
         setInstruction(null);
@@ -205,11 +179,6 @@ export default function VisionAssistant() {
 
         {/* Avatar & Navigation Section */}
         <div className="space-y-6">
-          {/* Ready Player Me Avatar */}
-          <div className="aspect-square w-full">
-            <RPMAvatar isThinking={isThinking} />
-          </div>
-
           <NavigationPanel 
             instruction={instruction} 
             destination={destination}
@@ -235,10 +204,6 @@ export default function VisionAssistant() {
               <div className="flex items-center justify-between">
                 <span className="text-xs font-mono text-white/50">COCO-SSD Lite</span>
                 <span className="text-xs font-mono text-[#00FF00]">Ready</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-mono text-white/50">RPM Avatar</span>
-                <span className="text-xs font-mono text-[#00FF00]">Active</span>
               </div>
             </div>
           </div>
