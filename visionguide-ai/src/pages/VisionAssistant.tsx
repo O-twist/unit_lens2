@@ -1,15 +1,15 @@
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useRef, useState, useEffect } from "react";
 import { CameraView } from "../components/CameraView";
 import { DetectionOverlay } from "../components/DetectionOverlay";
-import { NavigationPanel } from "../components/NavigationPanel";
 import { useObjectDetection } from "../hooks/useObjectDetection";
 import { useSpeech } from "../hooks/useSpeech";
-import { useVoiceAssistant } from "../hooks/useVoiceAssistant";
 import { getNavigationInstruction } from "../utils/navigation";
-import { Eye, Settings, Info, Loader2, Languages, ChevronDown, ShieldAlert, Sparkles, Navigation, AlertCircle } from "lucide-react";
+import { Loader2, Languages, ChevronDown, ShieldAlert, Navigation, AlertCircle } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { SALanguage, LANGUAGES, TRANSLATIONS } from "../types";
+import { translateText } from "../services/geminiService";
 import { Button } from "../components/Button";
+import { logActivity } from "../services/firebase";
 
 export default function VisionAssistant() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -17,48 +17,17 @@ export default function VisionAssistant() {
   const [cameraReady, setCameraReady] = useState(0);
   const { detections, isLoading } = useObjectDetection(videoRef, cameraReady);
   const { speak } = useSpeech(3000, lang); // 3s cooldown for more frequent updates
-  const [destination, setDestination] = useState("");
   const [instruction, setInstruction] = useState<string | null>(null);
   const lastSpokenRef = useRef<string | null>(null);
 
   const t = TRANSLATIONS[lang];
 
-  // Handle voice commands
-  const handleVoiceCommand = useCallback((command: string) => {
-    console.log("Voice command received:", command);
-    setIsThinking(true);
-
-    // Use Gemini to understand the command better
-    const { text: smartResponse, translatedText: translated } = await getAvatarResponse(command, lang);
-    speak(smartResponse);
-    if (lang !== "en-ZA" && translated) {
-      setTimeout(() => speak(translated, lang), 1500);
-    }
-    setIsThinking(false);
-
-    if (command.includes("navigate to") || command.includes("hamba uya e") || command.includes("hamba ekunene")) {
-      const dest = command.split(/navigate to|hamba uya e|hamba ekunene/i)[1]?.trim();
-      if (dest) {
-        setDestination(dest);
-      }
-    } else if (command.includes("stop") || command.includes("yima")) {
-      setDestination("");
-    }
-  }, []);
-
-  const { isListening, startListening } = useVoiceAssistant({
-    onCommand: handleVoiceCommand,
-    lang: lang,
-  });
-
   // Process navigation instructions
   useEffect(() => {
     const processInstruction = () => {
       if (detections.length > 0 && videoRef.current) {
-        let newInstruction = getNavigationInstruction(detections, videoRef.current.videoWidth, lang);
-
         const newInstruction = getNavigationInstruction(detections, videoRef.current.videoWidth, lang);
-        
+
         if (!newInstruction) {
           setInstruction(null);
           return;
@@ -70,9 +39,16 @@ export default function VisionAssistant() {
           speak(newInstruction);
           lastSpokenRef.current = newInstruction;
 
+          // Log the crucial activity to Firebase
+          logActivity("vision_alert", {
+            instruction: newInstruction,
+            language: lang,
+          });
+
           if (lang !== "en-ZA") {
-            const translated = await translateText(newInstruction, lang);
-            setTimeout(() => speak(translated, lang), 1500);
+            translateText(newInstruction, lang).then(translated => {
+              setTimeout(() => speak(translated, lang), 1500);
+            });
           }
         } else if (!newInstruction) {
           setInstruction(null);
@@ -84,13 +60,6 @@ export default function VisionAssistant() {
 
     processInstruction();
   }, [detections, speak, lang]);
-
-  // Handle destination start
-  useEffect(() => {
-    if (destination.trim()) {
-      speak(`${t.starting_nav} ${destination}. ${t.walk_forward}`);
-    }
-  }, [destination, speak, t]);
 
   return (
     <div className="min-h-screen bg-[#0a0a0c] text-white selection:bg-[#00FF00]/30 pt-20">
@@ -194,21 +163,6 @@ export default function VisionAssistant() {
           </div>
 
           {/* Compact Navigation Card */}
-          <div className="p-4 bg-[#151619] rounded-2xl border border-white/10 shadow-xl space-y-4">
-        </div>
-
-        {/* Avatar & Navigation Section */}
-        <div className="space-y-6">
-          <NavigationPanel 
-            instruction={instruction} 
-            destination={destination}
-            onDestinationChange={setDestination}
-            lang={lang}
-            onLanguageChange={setLang}
-            isListening={isListening}
-            onStartListening={startListening}
-          />
-          
           <div className="p-6 bg-[#151619] rounded-2xl border border-white/10 shadow-xl space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -217,15 +171,17 @@ export default function VisionAssistant() {
                   Navigation System
                 </span>
               </div>
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-[#00FF00] animate-pulse" />
-                <span className="text-[10px] font-mono uppercase tracking-wider text-[#00FF00]">
-                  Live Active
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-mono text-white/50">COCO-SSD Lite</span>
-                <span className="text-xs font-mono text-[#00FF00]">Ready</span>
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono text-white/50">COCO-SSD Lite</span>
+                  <span className="text-xs font-mono text-[#00FF00]">Ready</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-[#00FF00] animate-pulse" />
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-[#00FF00]">
+                    Live Active
+                  </span>
+                </div>
               </div>
             </div>
 

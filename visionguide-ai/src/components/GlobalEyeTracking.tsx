@@ -29,6 +29,7 @@ export default function GlobalEyeTracking() {
   const animRef = useRef<number | null>(null);
   const headDirRef = useRef<HeadDirection>("Center");
   const enabledRef = useRef(false);
+  const hoveredElRef = useRef<Element | null>(null);
 
   const {
     isBlinking,
@@ -40,15 +41,16 @@ export default function GlobalEyeTracking() {
     startTracking,
     stopTracking,
   } = useEyeBlinkDetection({
-    earThreshold: 0.28,
+    earThreshold: 0.25,
     minBlinkFrames: 1,
-    blinkCooldownMs: 800,
+    blinkCooldownMs: 400,
     headSensitivity: 0.03,
   });
 
   // Keep refs in sync
   useEffect(() => { headDirRef.current = headDirection; }, [headDirection]);
   useEffect(() => { enabledRef.current = enabled; }, [enabled]);
+  useEffect(() => { hoveredElRef.current = hoveredEl; }, [hoveredEl]);
 
   // If we are on the dedicated eye control page, this component should not render.
   // This prevents conflicts between the two eye tracking implementations.
@@ -75,7 +77,7 @@ export default function GlobalEyeTracking() {
   useEffect(() => {
     if (!enabled || !isReady) return;
 
-    const SPEED = 15; // pixels per frame
+    const SPEED = 30; // pixels per frame
     const EDGE_PADDING = 10;
 
     const moveCursor = () => {
@@ -158,19 +160,24 @@ export default function GlobalEyeTracking() {
     const target = document.elementFromPoint(x, y);
     if (cursorEl) cursorEl.style.display = "";
 
-    if (target) {
-      const clickable = target.closest("a, button, [role='button'], [onclick], input, select, textarea, [tabindex]") as HTMLElement;
-      if (clickable) {
-        // Trigger a real click
-        clickable.click();
-        clickable.focus();
+    // Prioritize clicking the element that is visually highlighted to the user
+    let clickable = hoveredElRef.current as HTMLElement;
 
-        // Announce what was clicked
-        const label = clickable.textContent?.trim().slice(0, 40) || "element";
-        const u = new SpeechSynthesisUtterance(`Clicked: ${label}`);
-        u.rate = 1.2;
-        window.speechSynthesis.speak(u);
-      }
+    // Fallback to whatever is exactly under the cursor right now
+    if (!clickable && target) {
+      clickable = target.closest("a, button, [role='button'], [onclick], input, select, textarea, [tabindex]") as HTMLElement;
+    }
+
+    if (clickable) {
+      // Trigger a real click
+      clickable.click();
+      clickable.focus();
+
+      // Announce what was clicked
+      const label = clickable.textContent?.trim().slice(0, 40) || "element";
+      const u = new SpeechSynthesisUtterance(`Clicked: ${label}`);
+      u.rate = 1.2;
+      window.speechSynthesis.speak(u);
     }
   }, [blinkCount, isReady]);
 
@@ -188,16 +195,18 @@ export default function GlobalEyeTracking() {
         const target = document.elementFromPoint(x, y);
         if (cursorEl) cursorEl.style.display = "";
 
-        if (target) {
-          const clickable = target.closest("a, button, [role='button'], [onclick], input, select, textarea, [tabindex]") as HTMLElement;
-          if (clickable) {
-            clickable.click();
-            clickable.focus();
-            const label = clickable.textContent?.trim().slice(0, 40) || "element";
-            const u = new SpeechSynthesisUtterance(`Clicked: ${label}`);
-            u.rate = 1.2;
-            window.speechSynthesis.speak(u);
-          }
+        let clickable = hoveredElRef.current as HTMLElement;
+        if (!clickable && target) {
+          clickable = target.closest("a, button, [role='button'], [onclick], input, select, textarea, [tabindex]") as HTMLElement;
+        }
+
+        if (clickable) {
+          clickable.click();
+          clickable.focus();
+          const label = clickable.textContent?.trim().slice(0, 40) || "element";
+          const u = new SpeechSynthesisUtterance(`Clicked: ${label}`);
+          u.rate = 1.2;
+          window.speechSynthesis.speak(u);
         }
       }
     };
